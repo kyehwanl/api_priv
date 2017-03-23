@@ -1,13 +1,30 @@
 #!/bin/sh
 
+version="1.1"
+
 # Show the tools syntax and exit 
 function syntax()
 {
-  echo "$0 [-v] -key <keyfile> -asn <asn> [-days <days valid>] [-c <openssl-config>] [-start <date>]"
+  echo "Syntax: $0 [options] -key <keyfile> -asn <asn>"
+  echo 
+  echo "  Required parameters:"
+  echo "    -key <keyfile>      A PEM encoded key file."
+  echo "    -asn <asn>          The AS number of the router key."
   echo
-  echo "  date: Allows all formates accepted using local 'date -s <format>'"
-  echo "        This setting requires root permission (or sudoers) and will modify the current date "
-  echo "        for the period of the function call. The original date will be set back!" 
+  echo "  Options:"
+  echo "    -?, ?, -h           This screen."
+  echo "    -v                  Enable verbose mode."
+  echo "    -days <valid>       valid: number of days this certificate will be valid"
+  echo "                        default is 365 days"
+  echo "    -c <openssl-config> The openssl configuration."
+  echo "                        Default: qsrx-router-key.cnf.tpl"
+  echo "    -start <date>       The date from when the certificate will be valid."
+  echo "                        Default: current date/"
+  echo "                        Format: Allows all formates accepted using local 'date -s <format>'"
+  echo "                        IMPORTANT!!!"
+  echo "                        This setting requires root permission (or sudoers) and will modify "
+  echo "                        the current date for the period of the function call."
+  echo "                        The original date will be set back!" 
   echo
   echo "This script is part of the BGP-SRx Software Suite"
   echo "2017 Oliver Borchert (oliver.borchert@nist.gov)"
@@ -142,17 +159,18 @@ START_TIME=$(date +%Y%m%d%H%M%S%Z)
 # use template file
 CFGFILE=qsrx-router-key.cnf.tpl
 
-# The number of required parameters
+# The number of required parameters - will be decreased by each required 
+# parameter
 REQUIRED_PARAMS=2
 # Parse all given parameters
 parseParams $@
 
 if [ $REQUIRED_PARAMS -gt 0 ] ; then
-  echo "Invalid number of parameters"
+  echo
+  echo "ERROR: Invalid number of parameters"
+  echo
   syntax
 fi
-
-exit 1
 
 if [ "$VERBOSE" != "" ] ; then
   echo "Settings:"
@@ -188,7 +206,13 @@ TMP_CFGFILE=$CFGFILE.$ASN.$SERIAL_HEX.tmp
 cat $CFGFILE | sed -e "s/{QSRX_ASN}/$ASN/g" > $TMP_CFGFILE
 
 # Generate the certificate request
-openssl req -new -batch -config $TMP_CFGFILE -subj /CN=ROUTER-$ASN_HEX -key $KEYFILE -out $CSRFILE
+openssl req -new -batch -config $TMP_CFGFILE -subj /CN=ROUTER-$ASN_HEX -key $KEYFILE -out $CSRFILE 1>/dev/null 2>&1
+
+if [ ! $? -eq 0 ] ; then
+  echo "ERROR: Could not generate the certificate request. check the key type, key MUST be PEM formated!"
+  exit 1
+fi
+
 # Generate the certificate itself
 openssl x509 -sha256 -extfile $TMP_CFGFILE -req -signkey $KEYFILE -days $CERT_VALIDITY -extensions bgpsec_router_ext -set_serial $SERIAL_DEC -in $CSRFILE -outform DER -out $CERTFILE
 rm $TMP_CFGFILE
