@@ -27,10 +27,12 @@
  * Known Issue:
  *   At this time only pem formated private keys can be loaded.
  * 
- * @version 0.2.0.0
+ * @version 0.2.0.3
  * 
  * Changelog:
  * -----------------------------------------------------------------------------
+ *  0.2.0.3 - 2017/04/21 - oborchert
+ *            * Modified some method documentation to be more precise.
  *  0.2.0.0 - 2016/06/30 - oborchert
  *            * Cleaned up unused code and removed compiler warnings
  *  0.2.0.0 - 2016/06/20 - oborchert
@@ -70,10 +72,13 @@ typedef struct _KS_Key_Element
   /** The array containing the ASKI of the key. */
   u_int8_t    ski[SKI_LENGTH];
   /** An array containing the DER formated key - Normally contains only one key 
-   * but in case of an SKI conflict multiple keys might be possible. */
+   * but in case of an SKI conflict multiple keys might be possible. 
+   * IMPORTANT: All derKeys are allocated using malloc, NOT OpenSSL_malloc.*/
   BGPSecKey** derKey;
   /** Contains the OpenSSL Key if loaded into memory - each array element 
-   * corresponds to the DER formated key. */
+   * corresponds to the DER formated key. 
+   * IMPORTANT: All ec_keys are allocated using OpenSSL based malloc, 
+   * NOT malloc. To free them use ECKEY_free()*/
   EC_KEY**    ec_key; 
   /** Number of times this key is used up to MAX_KEY_USED. */
   u_int16_t  timesUsed;

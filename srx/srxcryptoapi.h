@@ -19,11 +19,16 @@
  * BGPSEC implementations. This library allows to switch the crypto 
  * implementation dynamically.
  *
- * @version 0.2.0.2
+ * @version 0.2.0.3
  * 
  * ChangeLog:
  * -----------------------------------------------------------------------------
- *   0.2.0.1 - 2016/02/02 - oborchert
+ *   0.2.0.3 - 2017/04/20 - oborchert
+ *             * Fixed error in version control.
+ *             * Added IMPORTANT memory usage documentation to struct BGPSecKey
+ *             * Slightly re-worded some of the parameter documentation to be 
+ *               more precise on what the parameter MUST contain.
+ *   0.2.0.2 - 2017/02/02 - oborchert
  *             * Corrected version number to 0.2.0.2 which was incorrect.
  *           - 2016/11/15 - oborchert
  *             * Fixed issue with one byte bgpsec path attribute (BZ1051)
@@ -223,13 +228,13 @@ typedef struct
 {
   /** The id of the used algorithm suite (See RFC)*/
   u_int8_t  algoID;
-  /** The ASN that uses the Key */
+  /** The ASN that uses the Key (network format)*/
   u_int32_t asn;
   /** The SKI of the key */
   u_int8_t  ski[SKI_LENGTH];
-  /** The length of the key byte stream. */
+  /** The length of the key byte stream (host format). */
   u_int16_t keyLength;
-  /** The key in DER format */
+  /** The key in DER format (MUST BE malloc'ed not OpenSSL_malloc'ed)*/
   u_int8_t* keyData;
 } __attribute__((packed)) BGPSecKey;
 
@@ -476,7 +481,7 @@ typedef struct
    * This method allows to remove a particular key that is registered for the
    * given SKI and ASN.
    *
-   * @param key The key itself.
+   * @param key The key needs at least contain the ASN and SKI.
    * @param status Will contain the status information of this call.
    *
    * @return API_SUCCESS(1) or API_FAILURE(0 - check status)

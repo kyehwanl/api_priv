@@ -17,11 +17,19 @@
  *
  * This plugin provides an OpenSSL ECDSA implementation for BGPSEC.
  *
- * @version 0.2.0.2
+ * @version 0.2.0.3
  *
  * ChangeLog:
  * -----------------------------------------------------------------------------
- *   0.2.0.2 - 2016/01/12 - oborchert
+ *   0.2.0.3 - 2017/04/21 - oborchert
+ *             * Slightly remodeled the register key functions.
+ *             * modified _readKeyFile.
+ *             * Added some more documentation.
+ *           - 2017/04/20 - oborchert
+ *             * Fixed error in version control date.
+ *             * Added some clarifying in-line documentation.
+ *             * Updated function documentation
+ *   0.2.0.2 - 2017/01/12 - oborchert
  *             * Fixed bug 1068, hash memory allocated by this API did not get
  *               freed upon freeHashMessage call.
  *           - 2016/11/16 - oborchert
@@ -103,6 +111,9 @@ static KeyStorage* BOSSL_privKeys = NULL;
  *   API_STATUS_INFO_KEY_NOTFOUND: One or more keys are not found
  *   API_STATUS_ERR_KEY_IO: The key file was not found.
  * 
+ * This function is mainly used during initialization to allow pre-loading of
+ * keys.
+ * 
  * @param fName The name of the file ('\0' terminated String)
  * @param isPrivate indicate if the keys are private or public
  * @param status Set the status flag in case of an ERROR of for INFO
@@ -133,6 +144,8 @@ static void _readKeyFile(char* fName, bool isPrivate, sca_status_t* status,
       if (key.keyData != NULL)
       {
         free(key.keyData);
+        key.keyData   = NULL;
+        key.keyLength = 0;
       }      
       memset (&key, 0, sizeof(BGPSecKey));     
       key.algoID = SCA_ECDSA_ALGORITHM;
@@ -155,12 +168,14 @@ static void _readKeyFile(char* fName, bool isPrivate, sca_status_t* status,
               ptr = (u_int8_t*)line;
               ptr += idx + 1;
               char* valStr = (char*)ptr;
-              char hexBuf[5] = {'0', 'x', 0, 0, 0}; 
+              // hexBuff is a \0 terminated string, - thats why it needs 5 bytes
+              // to represent '0' 'x' 'A' 'B' '\0' for the string 0xAB
+              char hexBuff[5] = {'0', 'x', 0, 0, 0}; 
               for (idx=0; idx < SKI_LENGTH; idx++)
               {            
-                hexBuf[2] = valStr[0]; 
-                hexBuf[3] = valStr[1]; 
-                key.ski[idx] = (u_int8_t)strtol(hexBuf, NULL, 0);
+                hexBuff[2] = valStr[0]; 
+                hexBuff[3] = valStr[1]; 
+                key.ski[idx] = (u_int8_t)strtol(hexBuff, NULL, 0);
                 valStr += 2;
               }
               idx = read;
@@ -190,6 +205,7 @@ static void _readKeyFile(char* fName, bool isPrivate, sca_status_t* status,
             if (key.keyData != NULL)
             {
               free(key.keyData);
+              key.keyData = NULL;
             }
             key.keyLength = 0;
             break;
@@ -216,6 +232,8 @@ static void _readKeyFile(char* fName, bool isPrivate, sca_status_t* status,
     if (key.keyData != NULL)
     {
       free (key.keyData);
+      key.keyData   = NULL;
+      key.keyLength = 0;
     }
   }
   else
@@ -359,11 +377,18 @@ int init(const char* value, int logLevel, sca_status_t* status)
   }
   
   BOSSL_initialized = (myStatus & API_STATUS_ERROR_MASK) == API_STATUS_OK;
-  if (!BOSSL_initialized)
+  if (BOSSL_initialized)
+  {
+    sca_debugLog(LOG_INFO, "The internal key initialized storage holds (%u "
+                           "private and %u public keys)!\n", 
+                           BOSSL_privKeys->size, BOSSL_pubKeys->size);        
+  }
+  else
   {
     ks_release(BOSSL_privKeys);
     ks_release(BOSSL_pubKeys);
   }
+  
   return BOSSL_initialized ? API_SUCCESS : API_FAILURE;
 }
 
@@ -800,6 +825,41 @@ int validate(SCA_BGPSecValidationData* data)
     
     return retVal;
   }
+  
+  /**
+   * Register the given key. This method allows to register the
+   * key with the API object. The key must be internally copied. 
+   * The memory is NOT shared for longer than the registration execution cycle.
+   * NOTE: The key information MUST be copied within the API.
+   * 
+   * The following errors can be reported:
+   *   API_STATUS_ERR_NO_DATA: Some of the required data is missing.
+   *   Also see key_storage.ks_storeKey()
+   *
+   * @param key The key itself - MUST contain the DER encoded key.
+   * @param status Will contain the status information of this call.
+   * @param isPublic The type of key to be stored.
+   *
+   * @return API_SUCCESS(1) or API_FAILURE(0 - check status)
+   * 
+   * @since 0.2.0.3
+   */
+  static u_int8_t _registerKey(BGPSecKey* key, sca_status_t* status, 
+                               bool isPrivate)
+  {
+    u_int8_t retVal = API_FAILURE;
+    if (key->keyLength != 0)
+    {
+      retVal = ks_storeKey(isPrivate ? BOSSL_privKeys : BOSSL_pubKeys, 
+                           key, status, true);
+    }
+    else if (status != NULL)
+    {
+      *status = API_STATUS_ERR_NO_DATA;
+    }
+
+    return retVal;    
+  }
 
   /**
    * Register the private key. This method allows to register the
@@ -811,25 +871,14 @@ int validate(SCA_BGPSecValidationData* data)
    *   API_STATUS_ERR_NO_DATA: Some of the required data is missing.
    *   Also see key_storage.ks_storeKey()
    *
-   * @param key The key to be registered. The BGPSecKey Structure contains all
-   *            needed key information.
+   * @param key The key itself - MUST contain the DER encoded key.
    * @param status Will contain the status information of this call.
    *
    * @return API_SUCCESS(1) or API_FAILURE(0 - check status)
    */
   u_int8_t registerPrivateKey(BGPSecKey* key, sca_status_t* status)
   {
-    u_int8_t retVal = API_FAILURE;
-    if (key->keyLength != 0)
-    {
-      retVal = ks_storeKey(BOSSL_privKeys, key, status, true);
-    }
-    else if (status != NULL)
-    {
-      *status = API_STATUS_ERR_NO_DATA;
-    }
-
-    return retVal;
+    return _registerKey(key, status, true);
   }
 
   /**
@@ -859,21 +908,14 @@ int validate(SCA_BGPSecValidationData* data)
    *   API_STATUS_ERR_NO_DATA: Some of the required data is missing.
    *   See key_storage.ks_storeKey()
    * 
-   * @param key The key itself.
+   * @param key The key itself - MUST contain the DER encoded key.
    * @param status Will contain the status information of this call.
    *
    * @return API_SUCCESS(1) or API_FAILURE(0 - check status)
    */
   u_int8_t registerPublicKey(BGPSecKey* key, sca_status_t* status)
   {
-    if (key->keyLength == 0)
-          if (status != NULL)
-      {
-        *status = API_STATUS_ERR_NO_DATA;
-      }
-
-    // Right away convert to save time later on.
-    return ks_storeKey(BOSSL_pubKeys, key, status, true);    
+    return _registerKey(key, status, false);
   }
 
   /**
@@ -884,7 +926,7 @@ int validate(SCA_BGPSecValidationData* data)
    * The following errors can be reported:
    *   See key_storage.ks_delKey()
    * 
-   * @param key The key itself.
+   * @param key The key needs at least contain the ASN and SKI.
    * @param status Will contain the status information of this call.
    *
    * @return API_SUCCESS(1) or API_FAILURE(0 - check status)
