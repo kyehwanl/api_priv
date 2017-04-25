@@ -27,6 +27,8 @@
  * Changelog:
  * -----------------------------------------------------------------------------
  *   0.2.0.3 - 2017/04/19 - oborchert
+ *             * Added test parameter to arguments and restructured defines.
+ *           - 2017/04/19 - oborchert
  *             * Fixed checking of parameters.
  *             * Added some more testing, including the parameter '-k ...'
  *   0.1.2.2 - 2016/03/25 - oborchert
@@ -51,6 +53,28 @@
 
 /** String size. */
 #define STR_MAX 256
+
+/* informational */
+#define LOG_ERR     3
+/* informational */
+#define LOG_INFO    6
+/* debug-level messages */
+#define LOG_DEBUG   7 
+ /* The maximum number of keys */
+#define MAX_NO_KEYS   10
+/* The number of as paths */
+#define MAX_NO_ASPATH 3
+
+#ifndef SYSCONFDIR
+#define SYSCONFDIR "."
+#endif
+
+#define CONF_FILE SYSCONFDIR "/srxcryptoapi.conf"
+
+#define TEST_1 1
+#define TEST_2 2
+#define TEST_OK 0
+#define TEST_FAILED 1
 
 /** Contains provided key specifications. */
 typedef struct {
@@ -78,29 +102,7 @@ typedef struct {
 } KeyTester;
 
 static st_list* keyList = NULL;
-
-/* informational */
-#define LOG_ERR     3
-/* informational */
-#define LOG_INFO    6
-/* debug-level messages */
-#define LOG_DEBUG   7 
- /* The maximum number of keys */
-#define MAX_NO_KEYS   10
-/* The number of as paths */
-#define MAX_NO_ASPATH 3
-
-#ifndef SYSCONFDIR
-#define SYSCONFDIR "."
-#endif
-
-#define CONF_FILE SYSCONFDIR "/srxcryptoapi.conf"
-
-#define TEST_1 1
-#define TEST_2 2
-#define TEST_OK 0
-#define TEST_FAILED 1
-
+static st_test = TEST_1;
 
 /**
  * Add the key specification to the list
@@ -202,6 +204,14 @@ static void __syntax()
   printf ("  Options:\n");
   printf ("    -?               This screen!\n");
   printf ("    -f <cfg-file>    Use the provided configuration file!\n");
+  printf ("    -k <pub|priv> <asn> <20-byte ski as HEX VALUE>\n");
+  printf ("                     Add the particular key to the tests.\n");
+  printf ("    -t <1|2>         Run Test 1 or Test 2.\n");
+  printf ("             Test 1: Read configuration and then attempt to register\n");
+  printf ("                     the incomplete key. followed by unregister, ");
+  printf ("                     followed by a registration with der key loaded.\n");
+  printf ("             Test 2: Just load the keys in the order specified.\n");
+  printf ("    -t <1|2>         Run Test 1 or Test 2.\n");
   printf ("\n");
   printf ("2017 Advanced Network Technologies Division (NIST)!\n");
 }
@@ -256,6 +266,22 @@ static int _checkParams(int argc, char** argv, SRxCryptoAPI* crypto)
                 retVal = 1;
                 idx = argc;
               }
+              break;
+            case 't' :
+              if (idx < argc) // flipped variables BZ898
+              {
+                st_test = atoi(argv[++idx]);
+                switch (st_test)
+                {
+                  case TEST_1:
+                  case TEST_2:
+                    break;
+                  default:
+                    __syntax();
+                    retVal = 1;
+                }
+              }
+              
               break;
             case 'c' : 
               printf ("WARNING: Parameter -c is deprecated, please use -f "
@@ -468,14 +494,14 @@ int main(int argc, char** argv)
                 htonl(keySpec.asn), keySpec.ski);
         _setBGPSEcKey(&key, &keySpec);
 
-        int test = TEST_2;
-        
-        switch (test)
+        switch (st_test)
         {
           case TEST_1 : 
+            printf ("Run TEST 1\n");
             _doKeyTest_1(&key, &keySpec, &keyTester, keyName , &status);
             break;
           case TEST_2:
+            printf ("Run TEST 2\n");
             _doKeyTest_2(&key, &keySpec, &keyTester, keyName , &status);
             break;
           default:
