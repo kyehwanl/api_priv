@@ -104,6 +104,7 @@ static bool BOSSL_initialized = false;
 static KeyStorage* BOSSL_pubKeys = NULL;
 /** contains the private key storage. The more keys the slower signing. */
 static KeyStorage* BOSSL_privKeys = NULL;
+inline void printHex(int , unsigned char* );
 
 /**
  * Read the given file and pre-load all keys. The following non error status
@@ -631,6 +632,15 @@ int validate(SCA_BGPSecValidationData* data)
                  data->hashMessage[0]->hashMessageValPtr[idx]->hashMessageLength,
                  (u_int8_t*)&hashDigest);
 
+        if (sca_getCurrentLogLevel() > LOG_DEBUG)
+        {
+          printf("\nHash(validate):");
+          printHex(data->hashMessage[0]->hashMessageValPtr[idx]->hashMessageLength,
+              data->hashMessage[0]->hashMessageValPtr[idx]->hashMessagePtr);
+          printf("\nDigest(validate):");
+          printHex(SHA256_DIGEST_LENGTH, (u_int8_t*)hashDigest);
+        }
+
         signature = data->hashMessage[0]->hashMessageValPtr[idx]->signaturePtr
                     + sizeof(SCA_BGPSEC_SignatureSegment);
         // find the signature:
@@ -647,12 +657,12 @@ int validate(SCA_BGPSecValidationData* data)
                == 1)
             {
               retVal = API_VALRESULT_VALID;
-              sca_debugLog(LOG_DEBUG, "stack[%d] VERIFY SUCCESS\n", idx+1);
+              sca_debugLog(LOG_DEBUG, "\033[92m""stack[%d] VERIFY SUCCESS\n""\033[0m", idx+1);
             }
             else
             {
               retVal = API_VALRESULT_INVALID;
-              sca_debugLog(LOG_WARNING,"stack[%d] VERIFY FAILED\n", idx+1);
+              sca_debugLog(LOG_WARNING, "\033[91m""stack[%d] VERIFY FAILED\n""\033[0m", idx+1);
               break;
             }
           }
@@ -667,6 +677,9 @@ int validate(SCA_BGPSecValidationData* data)
         if (retVal == API_VALRESULT_INVALID)
         {
           data->status |= API_STATUS_INFO_SIGNATURE;
+          sca_debugLog(LOG_WARNING, "[%s:%d] verify failed and quit: ret:%d idx:%d, ecIdx:%d\n",
+              __FUNCTION__, __LINE__, retVal, idx, ecIdx );
+          //break; // No further validation needed
         }
       }
       else
@@ -699,169 +712,178 @@ int validate(SCA_BGPSecValidationData* data)
    *
    * @return API_SUCCESS (0) or API_FAILURE (1)
    */
-  int sign(SCA_BGPSecSignData* bgpsec_data)
+int sign(SCA_BGPSecSignData* bgpsec_data)
+{
+  int          retVal   = API_FAILURE;
+  sca_status_t myStatus = API_STATUS_ERR_NO_DATA;
+  bool         origin   = true;
+
+  // At this point lets see what king of input data we have. In case of origin
+  // we only might have the nlri, host information, and target.
+  // Otherwise we will have a bgpsec path attribute.
+  // In both cases we need the host, key, and target information
+  // - lets forst make sure we have this minimum of data available. Once this
+  // is established check for the next required set of data according to the
+  // mode - originate or transit.
+  if (bgpsec_data != NULL)
   {
-    int          retVal   = API_FAILURE;
-    sca_status_t myStatus = API_STATUS_ERR_NO_DATA;
-    bool         origin   = true;
-
-    // At this point lets see what king of input data we have. In case of origin
-    // we only might have the nlri, host information, and target.
-    // Otherwise we will have a bgpsec path attribute.
-    // In both cases we need the host, key, and target information
-    // - lets forst make sure we have this minimum of data available. Once this
-    // is established check for the next required set of data according to the
-    // mode - originate or transit.
-    if (bgpsec_data != NULL)
+    // So what is needed is this host information
+    if (bgpsec_data->myHost != NULL)
     {
-      // So what is needed is this host information
-      if (bgpsec_data->myHost != NULL)
+      // We need the ski to get the key
+      if (bgpsec_data->ski != NULL)
       {
-        // We need the ski to get the key
-        if (bgpsec_data->ski != NULL)
-        {
-          myStatus = API_STATUS_OK;
-        }
+        myStatus = API_STATUS_OK;
       }
     }
-
-    if (bgpsec_data->algorithmID != BOSSL_privKeys->algorithmID)
-    {
-      myStatus |= API_STATUS_ERR_INVLID_KEY;
-    }
-    else
-    {
-      // now check if transit or origination
-      origin = bgpsec_data->hashMessage == NULL;
-      if (origin)
-      {
-        // We need the NLRI to generate the hash message.
-        if (bgpsec_data->nlri != NULL)
-        {
-          // Now generate the hash Message:
-          bgpsec_data->hashMessage = sca_gnenerateOriginHashMessage(
-                                           bgpsec_data->peerAS,
-                                           bgpsec_data->myHost, bgpsec_data->nlri,
-                                           bgpsec_data->algorithmID);
-        }
-        else
-        {
-          myStatus = API_STATUS_ERR_NO_PREFIX;
-        }
-      }
-    }
-
-    if (myStatus == API_STATUS_OK)
-    {
-      // First find the key
-      u_int16_t noKeys = 0;
-      bgpsec_data->status = API_STATUS_OK;
-      EC_KEY** ec_keys = (EC_KEY**)ks_getKey(BOSSL_privKeys, bgpsec_data->ski,
-                                             bgpsec_data->myHost->asn, &noKeys,
-                                             ks_eckey_e, &bgpsec_data->status);
-      if (noKeys != 0)
-      {
-        // I know we do double work if this is an origin announcement. But only
-        // the first time because we now will store the hash and can re-use it
-        // the next time.
-        // There we might change the target AS and we might want to change
-        // pCount ans flags so that's why we need to rewrite this data each
-        // time. - Yes we overwrite the host AS each time
-        u_int8_t*  buffPtr  = bgpsec_data->hashMessage->buffer;
-        u_int32_t* targetAS = (u_int32_t*)buffPtr;
-        *targetAS = bgpsec_data->peerAS;
-        buffPtr += 4; // Move to the path segment
-
-        /* separate memcopy for origin and intermediate */
-        if(origin)
-          memcpy(buffPtr, bgpsec_data->myHost, LEN_SECPATHSEGMENT);
-        else
-          memcpy(bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessagePtr-2,
-              bgpsec_data->myHost, LEN_SECPATHSEGMENT);
-
-        u_int16_t sigLen  = ECDSA_size(ec_keys[0]);
-        uint usedLen = 0;
-        u_int8_t* sigBuff = malloc(sigLen);
-        memset (sigBuff, 0, sigLen);
-
-        /* temporay prepare two pointer holders for multi hop validation */
-        u_int8_t *pTmpHashMsgPtr = NULL;
-        u_int16_t iTmpHashMsgLeng = 0;
-
-        /* adjust hash message pointer for multi hop validation */
-        if(!origin)
-        {
-          pTmpHashMsgPtr  = bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessagePtr;
-          iTmpHashMsgLeng = bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessageLength;
-
-          bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessagePtr =
-            bgpsec_data->hashMessage->buffer;
-          bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessageLength =
-            bgpsec_data->hashMessage->bufferSize;
-        }
-
-        // Now generate the hash
-        // Temporary space for the generated message digest (hash)
-        u_int8_t hashDigest[SHA256_DIGEST_LENGTH];
-        // Generate the hash (messageDigest that will be signed.)
-        _createSha256Digest (
-                 bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessagePtr,
-                 bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessageLength,
-                 (u_int8_t*)&hashDigest);
-
-        // Use only the first key.
-        int res = ECDSA_sign(0, hashDigest, SHA256_DIGEST_LENGTH,
-                                sigBuff, (unsigned int*)&usedLen, ec_keys[0]);
-
-        /* after signing restore the saved pointer from the temp message holder */
-        if(!origin)
-        {
-          bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessagePtr = pTmpHashMsgPtr;
-          bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessageLength = iTmpHashMsgLeng;
-        }
-
-        if (res != 1)
-        {
-          myStatus |= API_STATUS_INFO_SIGNATURE;
-          /* error */
-          sca_debugLog(LOG_ERR, "+ [libcrypto] ECDSA_sing error: %s\n", \
-          ERR_error_string(ERR_get_error(), NULL));
-          ERR_print_errors_fp(stderr);
-          free(sigBuff);
-          sigBuff = NULL;
-        }
-        else
-        {
-          if (usedLen < sigLen)
-          {
-            sigBuff = realloc(sigBuff, usedLen);
-          }
-
-          if (bgpsec_data->signature != NULL)
-          {
-            // OK free up old data.
-            freeSignature(bgpsec_data->signature);
-          }
-          bgpsec_data->signature             = malloc(sizeof(SCA_Signature));
-          bgpsec_data->signature->ownedByAPI = true;
-          bgpsec_data->signature->algoID     = bgpsec_data->algorithmID;
-          memcpy(bgpsec_data->signature->ski, bgpsec_data->ski, SKI_LENGTH);
-//          bgpsec_data->signature->sigBuff    = malloc(usedLen);
-          bgpsec_data->signature->sigLen     = usedLen;
-          bgpsec_data->signature->sigBuff    = sigBuff;
-          //memcpy(bgpsec_data->signature->sigBuff, &sigBuff, usedLen);
-          retVal = API_SUCCESS;
-        }
-      }
-    }
-
-    if (bgpsec_data != NULL)
-    {
-      bgpsec_data->status |= myStatus;
-    }
-
-    return retVal;
   }
+
+  if (bgpsec_data->algorithmID != BOSSL_privKeys->algorithmID)
+  {
+    myStatus |= API_STATUS_ERR_INVLID_KEY;
+  }
+  else
+  {
+    // now check if transit or origination
+    origin = bgpsec_data->hashMessage == NULL;
+    if (origin)
+    {
+      // We need the NLRI to generate the hash message.
+      if (bgpsec_data->nlri != NULL)
+      {
+        // Now generate the hash Message:
+        bgpsec_data->hashMessage = sca_gnenerateOriginHashMessage(
+            bgpsec_data->peerAS,
+            bgpsec_data->myHost, bgpsec_data->nlri,
+            bgpsec_data->algorithmID);
+      }
+      else
+      {
+        myStatus = API_STATUS_ERR_NO_PREFIX;
+      }
+    }
+  }
+
+  if (myStatus == API_STATUS_OK)
+  {
+    // First find the key
+    u_int16_t noKeys = 0;
+    bgpsec_data->status = API_STATUS_OK;
+    EC_KEY** ec_keys = (EC_KEY**)ks_getKey(BOSSL_privKeys, bgpsec_data->ski,
+        bgpsec_data->myHost->asn, &noKeys,
+        ks_eckey_e, &bgpsec_data->status);
+    if (noKeys != 0)
+    {
+      // I know we do double work if this is an origin announcement. But only
+      // the first time because we now will store the hash and can re-use it
+      // the next time.
+      // There we might change the target AS and we might want to change
+      // pCount ans flags so that's why we need to rewrite this data each
+      // time. - Yes we overwrite the host AS each time
+      u_int8_t*  buffPtr  = bgpsec_data->hashMessage->buffer;
+      u_int32_t* targetAS = (u_int32_t*)buffPtr;
+      *targetAS = bgpsec_data->peerAS;
+      buffPtr += 4; // Move to the path segment
+
+      /* separate memcopy for origin and intermediate */
+      if(origin)
+        memcpy(buffPtr, bgpsec_data->myHost, LEN_SECPATHSEGMENT);
+      else
+        memcpy(bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessagePtr-2,
+            bgpsec_data->myHost, LEN_SECPATHSEGMENT);
+
+      u_int16_t sigLen  = ECDSA_size(ec_keys[0]);
+      uint usedLen = 0;
+      u_int8_t* sigBuff = malloc(sigLen);
+      memset (sigBuff, 0, sigLen);
+
+      /* temporay prepare two pointer holders for multi hop validation */
+      u_int8_t *pTmpHashMsgPtr = NULL;
+      u_int16_t iTmpHashMsgLeng = 0;
+
+      /* adjust hash message pointer for multi hop validation */
+      if(!origin)
+      {
+        pTmpHashMsgPtr  = bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessagePtr;
+        iTmpHashMsgLeng = bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessageLength;
+
+        bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessagePtr =
+          bgpsec_data->hashMessage->buffer;
+        bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessageLength =
+          bgpsec_data->hashMessage->bufferSize;
+      }
+
+      // Now generate the hash
+      // Temporary space for the generated message digest (hash)
+      u_int8_t hashDigest[SHA256_DIGEST_LENGTH];
+      // Generate the hash (messageDigest that will be signed.)
+      _createSha256Digest (
+          bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessagePtr,
+          bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessageLength,
+          (u_int8_t*)&hashDigest);
+
+      if (sca_getCurrentLogLevel() > LOG_DEBUG)
+      {
+        printf("\nHash(sign):");
+        printHex(bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessageLength,
+            bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessagePtr);
+        printf("\nDigest(sign):");
+        printHex(SHA256_DIGEST_LENGTH, (u_int8_t*)hashDigest);
+      }
+
+      // Use only the first key.
+      int res = ECDSA_sign(0, hashDigest, SHA256_DIGEST_LENGTH,
+          sigBuff, (unsigned int*)&usedLen, ec_keys[0]);
+
+      /* after signing restore the saved pointer from the temp message holder */
+      if(!origin)
+      {
+        bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessagePtr = pTmpHashMsgPtr;
+        bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessageLength = iTmpHashMsgLeng;
+      }
+
+      if (res != 1)
+      {
+        myStatus |= API_STATUS_INFO_SIGNATURE;
+        /* error */
+        sca_debugLog(LOG_ERR, "+ [libcrypto] ECDSA_sing error: %s\n", \
+            ERR_error_string(ERR_get_error(), NULL));
+        ERR_print_errors_fp(stderr);
+        free(sigBuff);
+        sigBuff = NULL;
+      }
+      else
+      {
+        if (usedLen < sigLen)
+        {
+          sigBuff = realloc(sigBuff, usedLen);
+        }
+
+        if (bgpsec_data->signature != NULL)
+        {
+          // OK free up old data.
+          freeSignature(bgpsec_data->signature);
+        }
+        bgpsec_data->signature             = malloc(sizeof(SCA_Signature));
+        bgpsec_data->signature->ownedByAPI = true;
+        bgpsec_data->signature->algoID     = bgpsec_data->algorithmID;
+        memcpy(bgpsec_data->signature->ski, bgpsec_data->ski, SKI_LENGTH);
+        //          bgpsec_data->signature->sigBuff    = malloc(usedLen);
+        bgpsec_data->signature->sigLen     = usedLen;
+        bgpsec_data->signature->sigBuff    = sigBuff;
+        //memcpy(bgpsec_data->signature->sigBuff, &sigBuff, usedLen);
+        retVal = API_SUCCESS;
+      }
+    }
+  }
+
+  if (bgpsec_data != NULL)
+  {
+    bgpsec_data->status |= myStatus;
+  }
+
+  return retVal;
+}
 
   /**
    * Register the given key. This method allows to register the
@@ -972,3 +994,16 @@ int validate(SCA_BGPSecValidationData* data)
   {
     return ks_delKey(BOSSL_pubKeys, key, status);
   }
+
+
+
+__attribute__((always_inline)) inline void printHex(int len, unsigned char* buff)
+{
+  int i;
+  for(i=0; i < len; i++ )
+  {
+    if(i%16 ==0) printf("\n");
+    printf("%02x ", buff[i]);
+  }
+  printf("\n");
+}
