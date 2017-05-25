@@ -632,7 +632,7 @@ int validate(SCA_BGPSecValidationData* data)
                  data->hashMessage[0]->hashMessageValPtr[idx]->hashMessageLength,
                  (u_int8_t*)&hashDigest);
 
-        if (sca_getCurrentLogLevel() > LOG_DEBUG)
+        if (sca_getCurrentLogLevel() >= LOG_DEBUG)
         {
           printf("\nHash(validate):");
           printHex(data->hashMessage[0]->hashMessageValPtr[idx]->hashMessageLength,
@@ -657,7 +657,7 @@ int validate(SCA_BGPSecValidationData* data)
                == 1)
             {
               retVal = API_VALRESULT_VALID;
-              sca_debugLog(LOG_DEBUG, "\033[92m""stack[%d] VERIFY SUCCESS\n""\033[0m", idx+1);
+              sca_debugLog(LOG_INFO, "\033[92m""stack[%d] VERIFY SUCCESS\n""\033[0m", idx+1);
             }
             else
             {
@@ -822,7 +822,7 @@ int sign(SCA_BGPSecSignData* bgpsec_data)
           bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessageLength,
           (u_int8_t*)&hashDigest);
 
-      if (sca_getCurrentLogLevel() > LOG_DEBUG)
+      if (sca_getCurrentLogLevel() >= LOG_DEBUG)
       {
         printf("\nHash(sign):");
         printHex(bgpsec_data->hashMessage->hashMessageValPtr[0]->hashMessageLength,
