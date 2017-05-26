@@ -679,7 +679,7 @@ int validate(SCA_BGPSecValidationData* data)
           data->status |= API_STATUS_INFO_SIGNATURE;
           sca_debugLog(LOG_WARNING, "[%s:%d] verify failed and quit: ret:%d idx:%d, ecIdx:%d\n",
               __FUNCTION__, __LINE__, retVal, idx, ecIdx );
-          //break; // No further validation needed
+          break; // No further validation needed
         }
       }
       else
