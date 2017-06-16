@@ -657,12 +657,12 @@ int validate(SCA_BGPSecValidationData* data)
                == 1)
             {
               retVal = API_VALRESULT_VALID;
-              sca_debugLog(LOG_INFO, "\033[92m""stack[%d] VERIFY SUCCESS\n""\033[0m", idx+1);
+              sca_debugLog(LOG_INFO, "\033[92m""stack[%d] VERIFY SUCCESS""\033[0m \n", idx+1);
             }
             else
             {
               retVal = API_VALRESULT_INVALID;
-              sca_debugLog(LOG_WARNING, "\033[91m""stack[%d] VERIFY FAILED\n""\033[0m", idx+1);
+              sca_debugLog(LOG_WARNING, "\033[91m""stack[%d] VERIFY FAILED""\033[0m \n", idx+1);
               break;
             }
           }
@@ -686,6 +686,7 @@ int validate(SCA_BGPSecValidationData* data)
       {
         retVal = API_VALRESULT_INVALID;
         data->status |= API_STATUS_INFO_KEY_NOTFOUND;
+        sca_debugLog(LOG_WARNING, "\033[91m""NO KEY -> VERIFY FAILED""\033[0m \n", idx+1);
         break; // No further validation needed
       }
     }
